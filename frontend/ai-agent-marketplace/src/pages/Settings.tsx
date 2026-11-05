@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@/hooks/useTheme';
+import { useProfile } from '@/hooks/useProfile';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -13,7 +14,7 @@ import {
   Wallet, User, Shield, Settings as SettingsIcon, Bell, Key, 
   LogOut, Moon, Sun, Globe, ShieldCheck, 
   CreditCard, History, Download, Upload, Eye, EyeOff,
-  Activity, FileText, Star, CheckCircle
+  Activity, FileText, Star, CheckCircle, Save
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -23,6 +24,28 @@ export const Settings: React.FC = () => {
   const { getContractClient } = useStellar();
   const [activeTab, setActiveTab] = useState<'profile' | 'wallet' | 'notifications' | 'security' | 'appearance'>('profile');
   const { theme, setTheme, isDark } = useTheme();
+
+  // ── profile form (Issue 2) ──────────────────────────────────────────────
+  const { profile, saveProfile } = useProfile();
+  const [displayName, setDisplayName] = useState(profile.displayName);
+  const [email, setEmail] = useState(profile.email);
+  const [bio, setBio] = useState(profile.bio);
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  // Sync form fields whenever the underlying profile changes (e.g. wallet switch)
+  useEffect(() => {
+    setDisplayName(profile.displayName);
+    setEmail(profile.email);
+    setBio(profile.bio);
+  }, [profile]);
+
+  const handleSaveProfile = () => {
+    saveProfile({ displayName, email, bio });
+    setProfileSaved(true);
+    setTimeout(() => setProfileSaved(false), 2500);
+  };
+  // ───────────────────────────────────────────────────────────────────────────
+
   const [notifications, setNotifications] = useState({
     emailJobUpdates: true,
     emailBidUpdates: true,
@@ -101,13 +124,51 @@ export const Settings: React.FC = () => {
 
                 <div className="border-t pt-6 space-y-4">
                   <div className="grid md:grid-cols-2 gap-4">
-                    <Input label="Display Name" placeholder="Your Name" defaultValue="" />
-                    <Input label="Email" type="email" placeholder="you@example.com" defaultValue="" />
+                    <Input
+                      label="Display Name"
+                      placeholder="Your Name"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                    />
+                    <Input
+                      label="Email"
+                      type="email"
+                      placeholder="you@example.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
                   </div>
-                  <Textarea label="Bio" placeholder="Tell others about yourself..." rows={3} defaultValue="" />
-                  <div className="flex gap-2">
-                    <Button variant="outline">Save Changes</Button>
-                    <Button variant="ghost">Cancel</Button>
+                  <Textarea
+                    label="Bio"
+                    placeholder="Tell others about yourself..."
+                    rows={3}
+                    value={bio}
+                    onChange={(e) => setBio(e.target.value)}
+                  />
+                  <div className="flex items-center gap-3">
+                    <Button
+                      onClick={handleSaveProfile}
+                      className="gap-2"
+                    >
+                      <Save className="h-4 w-4" />
+                      {profileSaved ? 'Saved!' : 'Save Changes'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setDisplayName(profile.displayName);
+                        setEmail(profile.email);
+                        setBio(profile.bio);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    {profileSaved && (
+                      <span className="text-sm text-green-500 flex items-center gap-1">
+                        <CheckCircle className="h-4 w-4" />
+                        Profile saved locally
+                      </span>
+                    )}
                   </div>
                 </div>
               </CardContent>
