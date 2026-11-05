@@ -438,15 +438,7 @@ export const Dashboard: React.FC = () => {
         )}
 
         {activeTab === 'reviews' && (
-          <div className="space-y-4">
-            <Card>
-              <CardContent className="p-8 text-center">
-                <MessageSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="font-semibold mb-1">Reviews</h3>
-                <p className="text-muted-foreground mb-4">Reviews from completed jobs will appear here</p>
-              </CardContent>
-            </Card>
-          </div>
+          <ReviewsTab publicKey={publicKey} />
         )}
       </div>
     </div>
@@ -774,3 +766,227 @@ function EmptyState({ icon: Icon, title, description, action }: {
 
 // Mock data removed — Dashboard now reads my-jobs, my-bids, my-agent and
 // platform stats directly from the on-chain contract via MarketplaceClient.
+
+// ── ReviewsTab (Issue 3) ──────────────────────────────────────────────────────
+/**
+ * Fetches reviews where the current user is the reviewee (i.e. reviews left
+ * for them by clients / other parties). Uses `getReviewsByReviewee` which
+ * returns a paginated list of review IDs, then resolves each to a full Review
+ * via `getReview`.
+ *
+ * Falls back gracefully when the contract client is not yet configured or
+ * when the user simply has no reviews yet.
+ */
+const REVIEWS_PAGE_SIZE = 20;
+
+function ReviewsTab({ publicKey }: { publicKey: string }) {
+  const { getContractClient } = useStellar();
+  const reviewsSentinelRef = useRef<HTMLDivElement>(null);
+
+  const {
+    data: reviewPages,
+    isLoading,
+    error,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<import('@/lib/types').Review[]>({
+    queryKey: ['myReviews', publicKey],
+    queryFn: async ({ pageParam }) => {
+      const offset = (pageParam as number) ?? 0;
+      const client = getContractClient();
+      if (!client) {
+        throw new Error('Not connected to the marketplace contract. Configure it in Settings.');
+      }
+      const ids: number[] = await client.getReviewsByReviewee(publicKey, offset, REVIEWS_PAGE_SIZE);
+      return Promise.all(ids.map((id: number) => client.getReview(id)));
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === REVIEWS_PAGE_SIZE
+        ? allPages.reduce((sum, p) => sum + p.length, 0)
+        : undefined,
+  });
+
+  const reviews = reviewPages?.pages.flat() ?? [];
+
+  // Infinite scroll sentinel
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { threshold: 0.1 },
+    );
+    if (reviewsSentinelRef.current) observer.observe(reviewsSentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        {[...Array(3)].map((_, i) => (
+          <Card key={i}>
+            <CardContent className="p-5">
+              <div className="flex gap-4">
+                <div className="flex-1 space-y-2">
+                  <div className="h-5 w-1/4 animate-pulse bg-muted rounded" />
+                  <div className="h-4 w-3/4 animate-pulse bg-muted rounded" />
+                  <div className="h-4 w-1/2 animate-pulse bg-muted rounded" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return <QueryError message={(error as Error)?.message} onRetry={() => refetch()} />;
+  }
+
+  if (reviews.length === 0) {
+    return (
+      <EmptyState
+        icon={MessageSquare}
+        title="No Reviews Yet"
+        description="Reviews from completed jobs will appear here once clients rate your work."
+        action={
+          <Link to="/marketplace">
+            <Button>Browse Jobs</Button>
+          </Link>
+        }
+      />
+    );
+  }
+
+  // Compute aggregate stats
+  const avgRating = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
+  const ratingCounts = [5, 4, 3, 2, 1].map((star) => ({
+    star,
+    count: reviews.filter((r) => r.rating === star).length,
+  }));
+
+  return (
+    <div className="space-y-6">
+      {/* Aggregate summary card */}
+      <Card>
+        <CardContent className="p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-6">
+            <div className="text-center">
+              <p className="text-5xl font-bold text-foreground">{avgRating.toFixed(1)}</p>
+              <div className="flex items-center justify-center gap-0.5 mt-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Star
+                    key={star}
+                    className={clsx(
+                      'h-5 w-5',
+                      star <= Math.round(avgRating)
+                        ? 'text-yellow-400 fill-yellow-400'
+                        : 'text-muted-foreground',
+                    )}
+                  />
+                ))}
+              </div>
+              <p className="text-sm text-muted-foreground mt-1">{reviews.length} review{reviews.length !== 1 ? 's' : ''}</p>
+            </div>
+
+            <div className="flex-1 space-y-2">
+              {ratingCounts.map(({ star, count }) => {
+                const pct = reviews.length > 0 ? (count / reviews.length) * 100 : 0;
+                return (
+                  <div key={star} className="flex items-center gap-2 text-sm">
+                    <span className="w-3 text-muted-foreground text-right">{star}</span>
+                    <Star className="h-3.5 w-3.5 text-yellow-400 fill-yellow-400 shrink-0" />
+                    <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-yellow-400 rounded-full transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="w-6 text-muted-foreground text-right">{count}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Individual review cards */}
+      {reviews.map((review) => (
+        <ReviewCard key={review.id} review={review} />
+      ))}
+
+      {/* Infinite scroll sentinel */}
+      <div ref={reviewsSentinelRef} className="flex justify-center py-4" aria-hidden="true">
+        {isFetchingNextPage && (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            Loading more reviews…
+          </div>
+        )}
+        {!hasNextPage && reviews.length > 0 && (
+          <p className="text-sm text-muted-foreground">All reviews loaded</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReviewCard({ review }: { review: import('@/lib/types').Review }) {
+  const shortReviewer = `${review.reviewer.slice(0, 6)}…${review.reviewer.slice(-4)}`;
+
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">
+                {review.reviewer.charAt(0)}
+              </div>
+              <div>
+                <p className="font-medium text-sm font-mono">{shortReviewer}</p>
+                <p className="text-xs text-muted-foreground">
+                  Job #{review.jobId} · {format(new Date(review.createdAt * 1000), 'MMM d, yyyy')}
+                </p>
+              </div>
+            </div>
+
+            {/* Star rating */}
+            <div className="flex items-center gap-0.5 mb-2">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Star
+                  key={star}
+                  className={clsx(
+                    'h-4 w-4',
+                    star <= review.rating
+                      ? 'text-yellow-400 fill-yellow-400'
+                      : 'text-muted-foreground',
+                  )}
+                />
+              ))}
+              <span className="ml-1.5 text-sm font-medium">{review.rating}/5</span>
+            </div>
+
+            {review.comment && (
+              <p className="text-sm text-muted-foreground leading-relaxed">{review.comment}</p>
+            )}
+          </div>
+
+          <Link to={`/job/${review.jobId}`}>
+            <Button variant="ghost" size="sm" className="shrink-0">
+              View Job
+              <ArrowRight className="h-3.5 w-3.5 ml-1" />
+            </Button>
+          </Link>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
